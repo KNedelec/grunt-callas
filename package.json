@@ -32,7 +32,10 @@
     "grunt-contrib-clean": "~0.4.0",
     "grunt-contrib-nodeunit": "~0.2.0",
     "grunt": "~0.4.2",
-    "promise": "~3.2.0"
+    "promise": "~3.2.0",
+    "mocha": "~1.15.1",
+    "gm": "~1.14.1",
+    "imagediff": "~1.0.4"
   },
   "peerDependencies": {
     "grunt": "~0.4.2"
