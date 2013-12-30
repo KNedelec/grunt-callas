@@ -13,10 +13,12 @@ var http = require('http'),
     Promise = require('promise'),
     cprocess = require('child_process'),
     Mocha = require('mocha'),
-    webdriver = require('browserstack-webdriver'),
+    bwebdriver = require('browserstack-webdriver'),
+    swebdriver = require('selenium-webdriver'),
     events = require('events'),
     fs = require('fs'),
-    gm = require('gm')
+    gm = require('gm'),
+    UtilsObject = require('../utils/object')
 ;
 
 module.exports = function(grunt) {
@@ -36,24 +38,29 @@ module.exports = function(grunt) {
                 user: 'kevinnedelec',
                 key: 'SzVD7GpwyvVExoLvnq3y'
             },
-            browsers: [{
-                platform: 'MAC',
-                browserName: 'iPhone',
-                version: '6.0'
+            browsers: [
+            {
+                browserName: 'phantomjs',
+                driver: 'selenium'
             },
+            /*{*/
+            /*platform: 'MAC',*/
+            /*browserName: 'iPhone',*/
+            /*version: '6.0'*/
+            /*},*/
             /*{*/
             /*browser: 'IE',*/
             /*browser_version: '10.0',*/
             /*os: 'Windows',*/
             /*os_version: '7'*/
             /*},*/
-            {
-                browser: 'firefox',
-                browser_version: '25.0',
-                os: 'Windows',
-                os_version: '8',
-                resolution: '1920x1200'
-            }
+            /*{*/
+            /*browser: 'firefox',*/
+            /*browser_version: '25.0',*/
+            /*os: 'Windows',*/
+            /*os_version: '8',*/
+            /*resolution: '1920x1200'*/
+            /*}*/
             ],
             tests: {
                 files: ['./firsttestremote.js'],
@@ -96,6 +103,9 @@ module.exports = function(grunt) {
         }).then(function(res){
             grunt.log.ok('Verification serveur http: OK');
 
+            //if phantom js return true
+            return true;
+
             return Promise(function(ok, ko){
 
                 var outlog = fs.openSync('./tunnel.out.log', 'a');
@@ -137,16 +147,24 @@ module.exports = function(grunt) {
 
                 grunt.log.ok('getting driver with browser %s on %s %s', browser.browser, browser.os, browser.os_version);
 
-                var capability = merge( {
-                    'browserstack.user': options.browserstack.user,
-                    'browserstack.key': options.browserstack.key,
-                    'browserstack.tunnel': true,
-                }, browser);
-                var driver = new webdriver.Builder().
-                    usingServer('http://hub.browserstack.com/wd/hub').
-                    withCapabilities(capability).
-                    build();
-
+                var capability, driver;
+                if(browser.browserName === 'phantomjs'){
+                    capability = browser;
+                    driver = new swebdriver.Builder().
+                        usingServer('http://localhost:8080').
+                        withCapabilities(capability).
+                        build();
+                } else {
+                    capability = UtilsObject.merge( {
+                        'browserstack.user': options.browserstack.user,
+                        'browserstack.key': options.browserstack.key,
+                        'browserstack.tunnel': true,
+                    }, browser);
+                    driver = new webdriver.Builder().
+                        usingServer('http://hub.browserstack.com/wd/hub').
+                        withCapabilities(capability).
+                        build();
+                }
                 var host = util.format('http://%s:%d', options.host.name || 'localhost', options.host.port || 80 );
 
                 driver.screenshot = function(name){
@@ -190,8 +208,8 @@ module.exports = function(grunt) {
                                             return ko();
                                         }
                                         console.log('match: ' + match);
-                                        var equality = parseFloat(match(1));
-                                        ok({
+                                        var equality = parseFloat(match[1]);
+                                        return ok({
                                             equal: equality > 0.7,
                                             equality: equality
                                         });
@@ -200,9 +218,9 @@ module.exports = function(grunt) {
                             })
                             .then(function (res){
                                 console.log('take screenshot done : ' + res);
-                                ok(res);
+                                return ok(res);
                             }, function(err){
-                                ko(err);
+                                return ko(err);
                             });
                         });
                     });
@@ -286,18 +304,3 @@ module.exports = function(grunt) {
         });;
     });
 }; 
-
-function merge(obj1, obj2){
-    var obj3 = { };
-    for(var attr in obj1){
-        if(obj1.hasOwnProperty(attr)){
-            obj3[attr] = obj1[attr];
-        }
-    }
-    for(var attr in obj2){
-        if(obj2.hasOwnProperty(attr)){
-            obj3[attr] = obj2[attr];
-        }
-    }
-    return obj3;
-}
