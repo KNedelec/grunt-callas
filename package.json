@@ -27,16 +27,18 @@
   "scripts": {
     "test": "grunt test"
   },
-  "devDependencies": {
-    "grunt-contrib-jshint": "~0.6.0",
-    "grunt-contrib-clean": "~0.4.0",
-    "grunt-contrib-nodeunit": "~0.2.0",
-    "grunt": "~0.4.2",
+  "dependencies": {
     "promise": "~3.2.0",
     "mocha": "~1.15.1",
     "gm": "~1.14.1",
     "imagediff": "~1.0.4",
     "selenium-webdriver": "~2.39.0"
+  },
+  "devDependencies": {
+    "grunt-contrib-jshint": "~0.6.0",
+    "grunt-contrib-clean": "~0.4.0",
+    "grunt-contrib-nodeunit": "~0.2.0",
+    "grunt": "~0.4.2"
   },
   "peerDependencies": {
     "grunt": "~0.4.2"

@@ -9,100 +9,62 @@
 'use strict';
 
 var http = require('http'),
-    util = require('util'),
-    Promise = require('promise'),
-    cprocess = require('child_process'),
-    Mocha = require('mocha'),
-    bwebdriver = require('browserstack-webdriver'),
-    swebdriver = require('selenium-webdriver'),
-    events = require('events'),
-    fs = require('fs'),
-    gm = require('gm'),
-    UtilsObject = require('../utils/object')
+util = require('util'),
+Promise = require('../utils/promise'),
+cprocess = require('child_process'),
+Mocha = require('mocha'),
+bwebdriver = require('browserstack-webdriver'),
+swebdriver = require('../lib/drivers/selenium').webdriver,
+events = require('events'),
+fs = require('fs'),
+gm = require('gm'),
+UtilsObject = require('../utils/object'),
+UtilsProcess = require('../utils/process')
 ;
+var Callas = function(grunt, task){
 
-module.exports = function(grunt) {
-    
-    // Please see the Grunt documentation for more information regarding task
-    // creation: http://gruntjs.com/creating-tasks
 
-    grunt.registerMultiTask('callas', 'Run crossbrowser functional tests based on webdriver and browserstack', function() {
-        // Merge task-specific and/or target-specific options with these defaults.
-        var options = this.options({
-            host: {
-                name: 'localhost',
-                port: 9000,
-                requireTunneling: true
-            },
-            browserstack: {
-                user: 'kevinnedelec',
-                key: 'SzVD7GpwyvVExoLvnq3y'
-            },
-            browsers: [
-            {
-                browserName: 'phantomjs',
-                driver: 'selenium'
-            },
-            /*{*/
-            /*platform: 'MAC',*/
-            /*browserName: 'iPhone',*/
-            /*version: '6.0'*/
-            /*},*/
-            /*{*/
-            /*browser: 'IE',*/
-            /*browser_version: '10.0',*/
-            /*os: 'Windows',*/
-            /*os_version: '7'*/
-            /*},*/
-            /*{*/
-            /*browser: 'firefox',*/
-            /*browser_version: '25.0',*/
-            /*os: 'Windows',*/
-            /*os_version: '8',*/
-            /*resolution: '1920x1200'*/
-            /*}*/
-            ],
-            tests: {
-                files: ['./firsttestremote.js'],
-                outputDir: 'output'
-            }
-        });
+    // Merge task-specific and/or target-specific options with these defaults.
+    var options = task.options({
+        screenshots:{
+            disable:false
+        },
+        selenium:{
+            port: 4444,
+            outlog: 'selhub.out.log',
+            errlog: 'parent'
+        },
+        phantomjs:{
+            port: 8080,
+            outlog: 'phantom.out.log',
+            errlog: 'parent'
+        },
+        server:{
+            outlog: 'wserver.out.log',
+            errlog: 'parent'
+        }
+    });
 
-        var _this = this;
-        var done = this.async();
-        this.driversLoaded = [];
+    var _this = this;
+    this.done = task.async();
+    this.driversLoaded = [];
+    this.prepareDrivers = prepareDrivers;
 
-        Promise(function(ok, ko){
-            
-            // system verifications
-            fs.exists('/usr/bin/compare', function(exists){
-                if(!exists){
-                    grunt.log.warn('image magick not found on the system');
-                }
-                return ok();
-            });
-        }).then(function (){
-            return Promise(function (ok, ko){
+    this.run = function(){
 
-                var request = http.request({
-                    hostname: options.host.name,
-                    port: options.host.port,
-                    method: 'GET',
-                    path: '/'
-                }, function(res){
-                    return ok(res);
-                });
+        var server = options.server;
 
-                request.on('error', function(e){
-                    return ko(e);
-                });
+        var state = {
+            enableImageComparison: !options.screenshots.disable,
+            testFiles: options.tests.files
+        }
 
-                request.end();
-            });
-
-        }).then(function(res){
-            grunt.log.ok('Verification serveur http: OK');
-
+        grunt.verbose.writeflags(state, 'state');
+        Promise.all(
+            !state.enableImageComparison || checkImageCompare(grunt, state),
+            checkTestFiles(grunt, state),
+            checkWebServer(grunt, options)
+        ).then(function(res){
             //if phantom js return true
             return true;
 
@@ -135,114 +97,77 @@ module.exports = function(grunt) {
             })
 
         }, function(err){
-            console.error(err);
+            if(err){
+                grunt.log.error(err);
+            }
             done(err);
 
         }).then(function(res){
 
-            var drivers = [];
-            var exec = cprocess.exec;
-            for ( var i = 0; i < options.browsers.length; i++) {
-                var browser = options.browsers[i];
+            grunt.verbose.writeln('Prepare to load drivers...');
+            return _this.prepareDrivers(options, grunt)
+            .then(function(drivers){
+                return Promise(function(ok, ko){
+                    console.log('selenium: ' + util.inspect(drivers));
+                    var exec = cprocess.exec;
+                    for ( var i = 0; i < drivers.length; i++) {
+                        var driverType = drivers[i];
+                        console.log('drivet type: ' + util.inspect(driverType));
+                        grunt.verbose.ok(driverType.length + ' ' + i + ' drivers loaded');
+                        for( var j = 0; j < driverType.length; j++){
+                            var browser = driverType[j].browser; 
 
-                grunt.log.ok('getting driver with browser %s on %s %s', browser.browser, browser.os, browser.os_version);
+                            grunt.verbose.writeln('getting driver with browser %s on %s %s', browser.browser || browser.browserName, browser.os || 'current', browser.os_version || '');
 
-                var capability, driver;
-                if(browser.browserName === 'phantomjs'){
-                    capability = browser;
-                    driver = new swebdriver.Builder().
-                        usingServer('http://localhost:8080').
-                        withCapabilities(capability).
-                        build();
-                } else {
-                    capability = UtilsObject.merge( {
-                        'browserstack.user': options.browserstack.user,
-                        'browserstack.key': options.browserstack.key,
-                        'browserstack.tunnel': true,
-                    }, browser);
-                    driver = new webdriver.Builder().
-                        usingServer('http://hub.browserstack.com/wd/hub').
-                        withCapabilities(capability).
-                        build();
-                }
-                var host = util.format('http://%s:%d', options.host.name || 'localhost', options.host.port || 80 );
+                            console.log('browser: ' + browser);
+                            var capability, driver;
+                            /*if(browser.browserName === 'phantomjs'){*/
+                            /*capability = browser;*/
+                            /*driver = new swebdriver.Builder().*/
+                            /*usingServer('http://localhost:8080').*/
+                            /*withCapabilities(capability).*/
+                            /*build();*/
+                            /*} else {*/
+                            /*capability = UtilsObject.merge( {*/
+                            /*'browserstack.user': options.browserstack.user,*/
+                            /*'browserstack.key': options.browserstack.key,*/
+                            /*'browserstack.tunnel': true,*/
+                            /*}, browser);*/
+                            /*driver = new bwebdriver.Builder().*/
+                            /*usingServer('http://hub.browserstack.com/wd/hub').*/
+                            /*withCapabilities(capability).*/
+                            /*build();*/
+                            /*}*/
+                            var host = util.format('http://%s:%d', options.server.name || 'localhost', options.server.port || 80 );
+                            console.log('driver: ' + driver);
 
-                driver.screenshot = function(name){
-                    var _this = this;
-                    return Promise(function (ok, ko){
-                        var fileName =  'screenshot/' + name + '_' + _this.id + '.png';
-                        var tempFileName = fileName;
-                        var diffFileName = fileName;
-                        fs.exists(fileName, function(exists){
-                            console.log('entering fs exists: ' + exists);
-                            if(exists){
-                                tempFileName = 'screenshot/' + name + '_' + _this.id + '__temp.png';
-                                diffFileName = 'screenshot/' + name + '_' + _this.id + '__diff.png';
-                            }   
+                            //driver.screenshot
+                            drivers[i] = Promise( function( ok, ko) {
+                                var _driver = driver;
+                                var browserName = browser.browser;
+                                _driver.get(host).then(function(res) {
+                                    grunt.log.debug('driver.get.then ' + browserName);
+                                    return _driver;
 
-                            return _this.takeScreenshot().then(function(data){
-                                console.log('sc taken');
-                                try{
-                                    fs.writeFileSync(tempFileName, data, 'base64');
-                                } catch(e) { console.log(e);}
-                                if(!exists){
-                                    console.log('!exists');
-                                    return true;
-                                }
-                                console.log('fs written');
+                                }, function(err) { 
+                                    console.error('fail with browser %s on %s %s', host, browser.browser, browser.os, browser.os_version);
+                                    throw(err);
 
-                                return Promise(function (ok, ko){
-                                    exec('compare -metric rmse ' + fileName + ' ' + tempFileName + ' ' + diffFileName, function(err, stdout, stderr){
-
-                                        console.log('exec cb');
-                                        if(err){
-                                            grunt.log.error(err);
-                                            grunt.log.error(stderr);
-                                            return ko();
-                                        }
-                                        var regex = /\((\d+\.?\d*)\)/m;
-                                        //image magic output is on stderr when -metric
-                                        var match = regex.exec(stderr);
-                                        if(!match){
-                                            grunt.log.error('unable to parse stderr: ' + stderr);
-                                            return ko();
-                                        }
-                                        console.log('match: ' + match);
-                                        var equality = parseFloat(match[1]);
-                                        return ok({
-                                            equal: equality > 0.7,
-                                            equality: equality
-                                        });
-                                    });
                                 });
-                            })
-                            .then(function (res){
-                                console.log('take screenshot done : ' + res);
-                                return ok(res);
-                            }, function(err){
-                                return ko(err);
                             });
+                        }
+
+                        return Promise.all(drivers).then(function (res) {
+                            _this.driversLoaded = res;
+                            grunt.log.debug('Promise.all ended');
+                            ok();
+                        }, function(err){
+                            grunt.log.error('Error while preparing drivers');
+                            grunt.log.error(err);
+                            ko();
                         });
-                    });
-                };
-                drivers[i] = Promise( function( ok, ko) {
-                    var _driver = driver;
-                    var browserName = browser.browser;
-                    _driver.get(host).then(function(res) {
-                        grunt.log.debug('driver.get.then ' + browserName);
-                        return ok(_driver);
-
-                    }, function(err) { 
-                        console.error('fail with browser %s on %s %s', host, browser.browser, browser.os, browser.os_version);
-                        return ko(err);
-
-                    });
+                    }
                 });
-            }
-            
-            return Promise.all(drivers).then(function (res) {
-                _this.driversLoaded = res;
-                grunt.log.debug('Promise.all ended');
             });
 
         }, function(err){
@@ -273,7 +198,6 @@ module.exports = function(grunt) {
                     try{
                         var runner = mocha.run( function() {
                             console.log('test finished');
-                            return ok();
                         });
                     } catch(e) {
                         console.log(e);
@@ -302,5 +226,203 @@ module.exports = function(grunt) {
             console.log('last then');
             done();
         });;
+
+    }
+
+}
+
+module.exports = function(grunt) {
+
+    grunt.registerMultiTask('callas', 'Run crossbrowser functional tests based on webdriver and browserstack', function() {
+        var callas = new Callas(grunt, this);
+        callas.run();
     });
 }; 
+
+function prepareDrivers(options, grunt){
+    var drivers = { }, promises = [];
+    grunt.verbose.writeln(options.browsers.length + ' browsers configured');
+    for(var i = 0; i < options.browsers.length; i++){
+        var b = options.browsers[i];
+        if(!drivers[b.driver]){
+            drivers[b.driver] = [];
+            drivers[b.driver].prepared= false;
+        };
+
+        switch(b.driver){
+            case 'selenium':
+                var _b = b;
+                promises.push(Promise.onlyIf(!drivers[b.driver].prepared, prepareSelenium(options, grunt))
+                      .then(function(res){
+                              var capability = UtilsObject.merge({ }, _b);
+                              delete capability.driver;
+                              var driver;
+                              console.log('browserName: ' + _b.browserName);
+                              if(_b.browserName === 'phantomjs' || _b.browser === 'phantomjs'){
+                                  preparePhantomjs(options, grunt)
+                                  .then(function(res){
+                                      driver = new swebdriver.Builder().
+                                          usingServer('http://localhost:' + options.phantomjs.port).
+                                          withCapabilities(capability).
+                                          build();
+                                      driver.browser = _b;
+                                      drivers[b.driver].push(driver);
+                                      console.log('DRIVER ADDED');
+         //                             drivers[b.driver].prepared = true;
+                                  });
+                              }else{
+                                  //selenium classic drivers
+                              }
+
+
+                          }));
+                          break;
+                          case 'browserstack':
+                              break;
+        }
+    }
+
+    return Promise.all(promises)
+        .then(function(){
+            console.log('returning prepared drivers : ' + util.inspect(drivers));
+            return drivers;
+        });
+}
+
+function prepareSelenium(options, grunt){
+
+    grunt.verbose.writeln('Preparing selenium hub...');
+    return UtilsProcess.runDetached(
+        'java -jar ' + __dirname + '/../bin/selenium-server-standalone-2.37.0.jar -role hub -port ' + options.selenium.port,
+        {
+            parentExit: function(proc){
+                try{
+                    proc.kill();
+                    grunt.verbose.log('Selenium hub killed');
+                }catch(exc){
+                    console.log('fail to kill selenium hub with exception ' + exc);
+                }
+            }
+        },
+        options.selenium.outlog,
+        options.selenium.errlog
+    ).then(function (proc){
+        console.log('selenium started with handler ' + proc._handle.pid);
+    }, function(err){
+        grunt.log.error('Error while starting selenium hub: ' + err);
+    });
+}
+
+function preparePhantomjs(options, grunt){
+    console.log('preparing phantomJs');
+
+    return UtilsProcess.runDetached(
+        'phantomjs --webdriver=' + options.phantomjs.port + ' --webdriver-selenium-grid-hub=http://127.0.0.1:' + options.selenium.port,
+        {
+            error: function(err){ grunt.log.error('Problem with phantomjs: ' + err); },
+            exit: function(exit){ grunt.log.writeln('Phantomjs hub has stopped'); },
+            parentExit: function(){
+                try{
+                    wserver.kill();
+                    grunt.verbose.log('Phantomjs hub killed');
+                }catch(exc){
+                    grunt.log.error('fail to kill phantomjs with exception ' + exc);
+                }
+            }
+        },
+        options.phantomjs.outlog,
+        options.phantomjs.errlog
+    ).then(function (proc){
+        console.log('phantomjs started');
+        ok();
+    });
+
+}
+
+function checkImageCompare(grunt, state){
+
+    if(state.enableImageComparison){
+        return Promise(function(ok, ko){
+            //verify we can compare screenshots
+            fs.exists('/usr/bin/compare', function(exists){
+                if(!exists){
+                    state.enableImageComparison = false;
+                    grunt.log.warn('image magick not found on the system');
+                }else{
+                    grunt.verbose.ok('image magick found');
+
+                }
+                return ok();
+            });
+        });
+    }
+
+    return true;
+}
+
+function checkTestFiles(grunt, state){
+    var all = [];
+    for(var i = 0; i < state.testFiles.length; i++){
+        var testFile = state.testFiles[i];
+        all.push(Promise(function(ok, ko){
+            fs.exists(testFile, function(exists){
+                if(!exists){
+                    grunt.log.warn('test file ' + testFile + ' not found, removed from test queue');
+                    state.testFiles.splice(i, 1);
+                }else{
+                    grunt.verbose.ok('test file ' +  testFile + ' found');
+
+                }
+                return ok();
+            });
+        }));
+    }
+
+    return Promise.all(all);
+}
+
+function checkWebServer(grunt, options){
+
+    return Promise(function (ok, ko){
+
+        var request = http.request({
+            hostname: options.server.name,
+            port: options.server.port,
+            method: 'GET',
+            path: '/'
+        }, function(res){
+            grunt.log.ok('web server already launched, listening on ' + options.server.name + ':' + options.server.port + ' [http ' + res.statusCode + ']');
+            ok(res);
+        });
+
+        request.on('error', function(e){
+            if(options.server.startCommand){
+                UtilsProcess.runDetached(
+                    options.server.startCommand,
+                    {
+                        error: function(err){ grunt.log.error('Web server error: ' + err); },
+                        exit: function(exit){ grunt.log.writeln('web server has stopped'); },
+                        parentExit: function(){
+                            try{
+                                wserver.kill();
+                                grunt.verbose.log('web server killed');
+                            }catch(exc){
+                                grunt.log.error('fail to kill web server with exception ' + exc);
+                            }
+                        }
+                    },
+                    options.server.outlog,
+                    options.server.errlog
+                ).then(function (proc){
+                    console.log(util.inspect(proc));
+                    ok();
+                });;
+            }else{
+                grunt.log.error('Nothing is listening on ' + options.server.name + ':' + options.server.port + '. Please launch your web server or configure server.startCommand');
+                ko();
+            }
+        });
+
+        request.end();
+    });
+}
