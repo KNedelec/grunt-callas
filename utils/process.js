@@ -20,19 +20,23 @@ module.exports = {
             promiseOut,
             promiseErr
         ).then(function(files){
-            var proc = cprocess.spawn(command, args, { detached: true, stdio: ['ignore', files[0], 'stderr' === errlog ? process.stderr : files[1]]});
+            return Promise(function(ok, ko){
+                var proc = cprocess.spawn(command, args, { detached: true, stdio: ['ignore', files[0], 'stderr' === errlog ? process.stderr : files[1]]});
 
-            if(listeners.parentExit){
-                process.on('exit', function(){ listeners.parentExit(proc); });
-            }else{
-                process.on('exit', proc.kill());
-            }
+                if(listeners.parentExit){
+                    process.on('exit', function(){ listeners.parentExit(proc); });
+                }else{
+                    process.on('exit', proc.kill());
+                }
 
-            proc.unref();
+                proc.unref();
 
-            console.log('proc.unref');
+                console.log('proc.unref');
 
-            return proc;
+                setTimeout(function(){
+                    ok(proc);
+                }, 4000);
+            });
         });
     },
 

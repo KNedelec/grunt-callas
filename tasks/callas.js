@@ -108,14 +108,19 @@ var Callas = function(grunt, task){
             return _this.prepareDrivers(options, grunt)
             .then(function(drivers){
                 return Promise(function(ok, ko){
-                    console.log('selenium: ' + util.inspect(drivers));
                     var exec = cprocess.exec;
-                    for ( var i = 0; i < drivers.length; i++) {
-                        var driverType = drivers[i];
-                        console.log('drivet type: ' + util.inspect(driverType));
-                        grunt.verbose.ok(driverType.length + ' ' + i + ' drivers loaded');
-                        for( var j = 0; j < driverType.length; j++){
-                            var browser = driverType[j].browser; 
+                    for (var driverType in drivers) {
+                        if(!drivers.hasOwnProperty(driverType)){
+                            continue;
+                        }
+                        if(!drivers[driverType].drivers.length){
+                            console.log('driver type ' + driverType + ' has 0 drivers loaded, its tests are canceled');
+                            continue;
+                        }
+                        var driversLoaded = drivers[driverType].drivers;
+
+                        for( var j = 0; j < driversLoaded.length; j++){
+                            var browser = driversLoaded[j].browser; 
 
                             grunt.verbose.writeln('getting driver with browser %s on %s %s', browser.browser || browser.browserName, browser.os || 'current', browser.os_version || '');
 
@@ -142,7 +147,7 @@ var Callas = function(grunt, task){
                             console.log('driver: ' + driver);
 
                             //driver.screenshot
-                            drivers[i] = Promise( function( ok, ko) {
+                            drivers[j] = Promise( function( ok, ko) {
                                 var _driver = driver;
                                 var browserName = browser.browser;
                                 _driver.get(host).then(function(res) {
@@ -245,7 +250,8 @@ function prepareDrivers(options, grunt){
     for(var i = 0; i < options.browsers.length; i++){
         var b = options.browsers[i];
         if(!drivers[b.driver]){
-            drivers[b.driver] = [];
+            drivers[b.driver] = { };
+            drivers[b.driver].drivers = [];
             drivers[b.driver].prepared= false;
         };
 
@@ -259,15 +265,18 @@ function prepareDrivers(options, grunt){
                               var driver;
                               console.log('browserName: ' + _b.browserName);
                               if(_b.browserName === 'phantomjs' || _b.browser === 'phantomjs'){
-                                  preparePhantomjs(options, grunt)
+                                  return preparePhantomjs(options, grunt)
                                   .then(function(res){
-                                      driver = new swebdriver.Builder().
-                                          usingServer('http://localhost:' + options.phantomjs.port).
-                                          withCapabilities(capability).
-                                          build();
-                                      driver.browser = _b;
-                                      drivers[b.driver].push(driver);
-                                      console.log('DRIVER ADDED');
+                                      return Promise(function(ok, ko){
+                                          driver = new swebdriver.Builder().
+                                              usingServer('http://localhost:' + options.phantomjs.port).
+                                              withCapabilities(capability).
+                                              build();
+                                          driver.browser = _b;
+                                          drivers[_b.driver].drivers.push(driver);
+                                          console.log('DRIVER ADDED');
+                                          ok();
+                                      });
          //                             drivers[b.driver].prepared = true;
                                   });
                               }else{
@@ -334,7 +343,7 @@ function preparePhantomjs(options, grunt){
         options.phantomjs.errlog
     ).then(function (proc){
         console.log('phantomjs started');
-        ok();
+        return proc;
     });
 
 }
