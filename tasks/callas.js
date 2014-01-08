@@ -118,14 +118,16 @@ var Callas = function(grunt, task){
                             continue;
                         }
                         var driversLoaded = drivers[driverType].drivers;
+                        var promises = [];
 
                         for( var j = 0; j < driversLoaded.length; j++){
+                            var driver = driversLoaded[j];
                             var browser = driversLoaded[j].browser; 
 
                             grunt.verbose.writeln('getting driver with browser %s on %s %s', browser.browser || browser.browserName, browser.os || 'current', browser.os_version || '');
 
                             console.log('browser: ' + browser);
-                            var capability, driver;
+                            var capability;
                             /*if(browser.browserName === 'phantomjs'){*/
                             /*capability = browser;*/
                             /*driver = new swebdriver.Builder().*/
@@ -147,25 +149,27 @@ var Callas = function(grunt, task){
                             console.log('driver: ' + driver);
 
                             //driver.screenshot
-                            drivers[j] = Promise( function( ok, ko) {
+                            promises.push(Promise( function( ok, ko) {
                                 var _driver = driver;
                                 var browserName = browser.browser;
+                                console.log('host: ' + util.inspect(host));
+                                console.log('driver: ' + util.inspect(_driver.__proto__));
                                 _driver.get(host).then(function(res) {
-                                    grunt.log.debug('driver.get.then ' + browserName);
-                                    return _driver;
+                                    grunt.log.debug('driver.get.then ' + util.inspect(res, {depth:4}));
+                                    ok(_driver);
 
                                 }, function(err) { 
                                     console.error('fail with browser %s on %s %s', host, browser.browser, browser.os, browser.os_version);
                                     throw(err);
 
                                 });
-                            });
+                            }));
                         }
 
-                        return Promise.all(drivers).then(function (res) {
-                            _this.driversLoaded = res;
+                        return Promise.all(promises).then(function (res) {
                             grunt.log.debug('Promise.all ended');
-                            ok();
+                            _this.driversLoaded = res;
+                            ok(res);
                         }, function(err){
                             grunt.log.error('Error while preparing drivers');
                             grunt.log.error(err);
@@ -185,41 +189,46 @@ var Callas = function(grunt, task){
             grunt.log.ok('browsers launched');
 
             var testPromises = [];
-            for (var di = 0; di < _this.driversLoaded.length; di++) {
-                var _di = di;
+            console.log(util.inspect(_this.driversLoaded));
+
+            for(var di = 0; di < _this.driversLoaded.length; di++){
                 testPromises[di] = Promise(function(ok, ko) {
-                    var driver = _this.driversLoaded[di];
-                    var mocha = new Mocha;
+                            var driver = _this.driversLoaded[di];
 
-                    for (var tf = 0; tf < options.tests.files.length; tf++) {
-                        var file = options.tests.files[tf];
-                        mocha.addFile(file);
-                    }
+                            var mocha = new Mocha;
 
-                    mocha.suite.on('post-require', function(){
-                        driver.id = _di;
-                        process.emit('driverReady', driver);
-                    });
-                    try{
-                        var runner = mocha.run( function() {
-                            console.log('test finished');
+                            for (var tf = 0; tf < options.tests.files.length; tf++) {
+                                var file = options.tests.files[tf];
+                                mocha.addFile(file);
+                            }
+
+                            mocha.suite.on('post-require', function(){
+                                driver.id = di;
+                                process.emit('driverReady', driver);
+                            });
+                            try{
+                                var runner = mocha.run( function() {
+                                    console.log('test finished');
+                                    ok(runner);
+                                });
+                            } catch(e) {
+                                console.log(e);
+                                grunt.log.error(e);
+                                return ko();
+                            }
+                            runner.on('pass', function(test) {
+                                console.log('... %s passed', test.title);
+                            });
+                            runner.on('fail', function(test) {
+                                console.log('... %s failed', test.title);
+                            });
                         });
-                    } catch(e) {
-                        console.log(e);
-                        grunt.log.error(e);
-                        return ko();
-                    }
-                    runner.on('pass', function(test) {
-                        console.log('... %s passed', test.title);
-                    });
-                    runner.on('fail', function(test) {
-                        console.log('... %s failed', test.title);
-                    });
-                });
             }
 
             return Promise.all(testPromises).then(function (){
                 grunt.log.ok('all test promises ended');
+            }, function(err){
+                grunt.log.error('error with mocha' + util.inspect(err));
             });
         }, function (err) {
             grunt.log.ok('last then error');
@@ -272,6 +281,7 @@ function prepareDrivers(options, grunt){
                                               usingServer('http://localhost:' + options.phantomjs.port).
                                               withCapabilities(capability).
                                               build();
+                                          driver.setContext({ capability: capability});
                                           driver.browser = _b;
                                           drivers[_b.driver].drivers.push(driver);
                                           console.log('DRIVER ADDED');
