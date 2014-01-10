@@ -12,7 +12,7 @@ module.exports = {
             command = parsedCmd.cmd;
             args = parsedCmd.args;
         }
-
+console.log(args);
         var fsopen = Promise.denodeify(fs.open);
         var promiseOut = 'stdout' === outlog ? Promise.empty() : fsopen(outlog, 'w');
         var promiseErr = 'stderr' === errlog ? Promise.empty() : fsopen(errlog, 'w');

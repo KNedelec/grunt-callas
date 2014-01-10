@@ -13,7 +13,7 @@ util = require('util'),
 Promise = require('../utils/promise'),
 cprocess = require('child_process'),
 Mocha = require('mocha'),
-bwebdriver = require('browserstack-webdriver'),
+bwebdriver = require('../lib/drivers/browserstack').webdriver,
 swebdriver = require('../lib/drivers/selenium').webdriver,
 events = require('events'),
 fs = require('fs'),
@@ -27,17 +27,23 @@ var Callas = function(grunt, task){
     // Merge task-specific and/or target-specific options with these defaults.
     var options = task.options({
         screenshots:{
-            disable:false
+            disable:false,
+            compare: true,
+            baseDir: 'screenshots'
         },
         selenium:{
             port: 4444,
             outlog: 'selhub.out.log',
-            errlog: 'parent'
+            errlog: 'stderr'
+        },
+        browserstack:{
+            outlog: 'tunnel.out.log',
+            errlog: 'stderr'
         },
         phantomjs:{
             port: 8080,
             outlog: 'phantom.out.log',
-            errlog: 'parent'
+            errlog: 'stderr'
         },
         server:{
             outlog: 'wserver.out.log',
@@ -54,70 +60,48 @@ var Callas = function(grunt, task){
 
         var server = options.server;
 
-        var state = {
-            enableImageComparison: !options.screenshots.disable,
-            testFiles: options.tests.files
-        }
+        grunt.verbose.subhead('Checking application params...');
 
-        grunt.verbose.writeflags(state, 'state');
         Promise.all(
-            !state.enableImageComparison || checkImageCompare(grunt, state),
-            checkTestFiles(grunt, state),
+            options.screenshots.disable || prepareScreenshots(grunt, options),
+            !options.screenshots.compare  || checkImageCompare(grunt, options),
+            checkTestFiles(grunt, options),
             checkWebServer(grunt, options)
+
         ).then(function(res){
-            //if phantom js return true
+
+            if(options.browserstack && options.browserstack.requireTunneling){
+                grunt.verbose.subhead('Preparing drivers...');
+                return prepareBrowserstack(options, grunt);
+            }
             return true;
 
-            return Promise(function(ok, ko){
-
-                var outlog = fs.openSync('./tunnel.out.log', 'a');
-                var errlog = fs.openSync('./tunnel.out.log', 'a');
-                var spawn = cprocess.spawn;
-                _this.jarTunnel = spawn('java', ['-jar', 'bin/BrowserStackTunnel.jar', options.browserstack.key, options.host.name + ',' + options.host.port + ',0'], { detached: true, stdio: ['ignore', outlog, errlog] });
-                _this.jarTunnel.unref();
-                _this.jarTunnel.on('error', function(err){
-                    grunt.log.error('BrowserStackTunnel a PLANTE');
-                    throw(err);
-                });
-
-                _this.jarTunnel.on('exit', function(exit){
-                    grunt.log.error('Browserstacl tunnel has stopped');
-                    console.error(exit);
-                    throw(exit);
-                });
-
-                process.on('exit', function(){
-                    _this.jarTunnel.kill();
-                });
-
-                setTimeout(function (){
-                    //wait for tunneling to be created
-                    return ok(_this.jarTunnel);
-                }, 5000);
-            })
-
         }, function(err){
-            if(err){
-                grunt.log.error(err);
-            }
+            if(err){ grunt.log.error(err); }
             done(err);
 
         }).then(function(res){
 
-            grunt.verbose.writeln('Prepare to load drivers...');
+            grunt.log.ok('Application parameters: OK');
+            grunt.verbose.subhead('Preparing drivers...');
+
             return _this.prepareDrivers(options, grunt)
-            .then(function(drivers){
+                .then(function(){
+
+                grunt.verbose.ok(_this.driversLoaded[0] + ' drivers successfully prepared');
+                grunt.verbose.ok('driversLoaded: ' + util.inspect(_this.driversLoaded));
+
                 return Promise(function(ok, ko){
                     var exec = cprocess.exec;
-                    for (var driverType in drivers) {
-                        if(!drivers.hasOwnProperty(driverType)){
+                    for (var driverType in _this.driversLoaded) {
+                        if(!_this.driversLoaded.hasOwnProperty(driverType)){
                             continue;
                         }
-                        if(!drivers[driverType].drivers.length){
+                        if(!_this.driversLoaded[driverType].drivers.length){
                             console.log('driver type ' + driverType + ' has 0 drivers loaded, its tests are canceled');
                             continue;
                         }
-                        var driversLoaded = drivers[driverType].drivers;
+                        var driversLoaded = _this.driversLoaded[driverType].drivers;
                         var promises = [];
 
                         for( var j = 0; j < driversLoaded.length; j++){
@@ -128,47 +112,27 @@ var Callas = function(grunt, task){
 
                             console.log('browser: ' + browser);
                             var capability;
-                            /*if(browser.browserName === 'phantomjs'){*/
-                            /*capability = browser;*/
-                            /*driver = new swebdriver.Builder().*/
-                            /*usingServer('http://localhost:8080').*/
-                            /*withCapabilities(capability).*/
-                            /*build();*/
-                            /*} else {*/
-                            /*capability = UtilsObject.merge( {*/
-                            /*'browserstack.user': options.browserstack.user,*/
-                            /*'browserstack.key': options.browserstack.key,*/
-                            /*'browserstack.tunnel': true,*/
-                            /*}, browser);*/
-                            /*driver = new bwebdriver.Builder().*/
-                            /*usingServer('http://hub.browserstack.com/wd/hub').*/
-                            /*withCapabilities(capability).*/
-                            /*build();*/
-                            /*}*/
                             var host = util.format('http://%s:%d', options.server.name || 'localhost', options.server.port || 80 );
-                            console.log('driver: ' + driver);
 
-                            //driver.screenshot
                             promises.push(Promise( function( ok, ko) {
                                 var _driver = driver;
                                 var browserName = browser.browser;
                                 console.log('host: ' + util.inspect(host));
-                                console.log('driver: ' + util.inspect(_driver.__proto__));
                                 _driver.get(host).then(function(res) {
-                                    grunt.log.debug('driver.get.then ' + util.inspect(res, {depth:4}));
+                                    grunt.log.debug('driver.get.then ' + res);
+                                    _driver.context.host = host;
                                     ok(_driver);
 
-                                }, function(err) { 
+                                }, function(err) {
                                     console.error('fail with browser %s on %s %s', host, browser.browser, browser.os, browser.os_version);
                                     throw(err);
 
-                                });
+                                });;
                             }));
                         }
 
                         return Promise.all(promises).then(function (res) {
                             grunt.log.debug('Promise.all ended');
-                            _this.driversLoaded = res;
                             ok(res);
                         }, function(err){
                             grunt.log.error('Error while preparing drivers');
@@ -180,7 +144,6 @@ var Callas = function(grunt, task){
             });
 
         }, function(err){
-            grunt.log.error('Error while creating tunnel');
             grunt.log.error(err);
             done();
 
@@ -189,40 +152,46 @@ var Callas = function(grunt, task){
             grunt.log.ok('browsers launched');
 
             var testPromises = [];
-            console.log(util.inspect(_this.driversLoaded));
 
-            for(var di = 0; di < _this.driversLoaded.length; di++){
-                testPromises[di] = Promise(function(ok, ko) {
-                            var driver = _this.driversLoaded[di];
+            var ind = 0;
+            for(var driverType in _this.driversLoaded){
+                if(!_this.driversLoaded.hasOwnProperty(driverType) ||
+                   !_this.driversLoaded[driverType].drivers.length){
+                    continue;
+                }
+                for(var di = 0; di < _this.driversLoaded[driverType].drivers.length; di++){
+                    testPromises[++ind] = Promise(function(ok, ko) {
+                        var driver = _this.driversLoaded[driverType].drivers[di];
 
-                            var mocha = new Mocha;
+                        var mocha = new Mocha;
 
-                            for (var tf = 0; tf < options.tests.files.length; tf++) {
-                                var file = options.tests.files[tf];
-                                mocha.addFile(file);
-                            }
+                        for (var tf = 0; tf < options.tests.files.length; tf++) {
+                            var file = options.tests.files[tf];
+                            mocha.addFile(file);
+                        }
 
-                            mocha.suite.on('post-require', function(){
-                                driver.id = di;
-                                process.emit('driverReady', driver);
-                            });
-                            try{
-                                var runner = mocha.run( function() {
-                                    console.log('test finished');
-                                    ok(runner);
-                                });
-                            } catch(e) {
-                                console.log(e);
-                                grunt.log.error(e);
-                                return ko();
-                            }
-                            runner.on('pass', function(test) {
-                                console.log('... %s passed', test.title);
-                            });
-                            runner.on('fail', function(test) {
-                                console.log('... %s failed', test.title);
-                            });
+                        mocha.suite.on('post-require', function(){
+                            driver.id = di;
+                            process.emit('driverReady', driver);
                         });
+                        try{
+                            var runner = mocha.run( function() {
+                                console.log('test finished');
+                                ok(runner);
+                            });
+                        } catch(e) {
+                            console.log(e);
+                            grunt.log.error(e);
+                            return ko();
+                        }
+                        runner.on('pass', function(test) {
+                            console.log('... %s passed', test.title);
+                        });
+                        runner.on('fail', function(test) {
+                            console.log('... %s failed', test.title);
+                        });
+                    });
+                }
             }
 
             return Promise.all(testPromises).then(function (){
@@ -253,9 +222,28 @@ module.exports = function(grunt) {
     });
 }; 
 
+function prepareScreenshots(grunt, options){
+    return Promise(function(ok, ko){
+        if(options.screenshots && options.screenshots.baseDir) {
+            fs.exists(options.screenshots.baseDir, function(exists){
+                if(!exists){
+                    fs.mkdir(options.screenshots.baseDir);
+                }
+                ok();
+            });
+
+        }else{
+            throw('No screenshots baseDir configuration');
+        }
+    });
+}
+
 function prepareDrivers(options, grunt){
-    var drivers = { }, promises = [];
-    grunt.verbose.writeln(options.browsers.length + ' browsers configured');
+
+    var _this = this;
+    var drivers = this.driversLoaded, promises = [];
+    grunt.verbose.writeln(options.browsers.length + ' drivers to configure..');
+
     for(var i = 0; i < options.browsers.length; i++){
         var b = options.browsers[i];
         if(!drivers[b.driver]){
@@ -266,48 +254,98 @@ function prepareDrivers(options, grunt){
 
         switch(b.driver){
             case 'selenium':
-                var _b = b;
-                promises.push(Promise.onlyIf(!drivers[b.driver].prepared, prepareSelenium(options, grunt))
+                (function(_b){
+                    grunt.verbose.writeflags(_b, 'Browser');
+
+                    promises.push(Promise.onlyIf(!drivers[b.driver].prepared, prepareSelenium(options, grunt))
                       .then(function(res){
-                              var capability = UtilsObject.merge({ }, _b);
-                              delete capability.driver;
-                              var driver;
-                              console.log('browserName: ' + _b.browserName);
-                              if(_b.browserName === 'phantomjs' || _b.browser === 'phantomjs'){
-                                  return preparePhantomjs(options, grunt)
-                                  .then(function(res){
-                                      return Promise(function(ok, ko){
-                                          driver = new swebdriver.Builder().
-                                              usingServer('http://localhost:' + options.phantomjs.port).
-                                              withCapabilities(capability).
-                                              build();
-                                          driver.setContext({ capability: capability});
-                                          driver.browser = _b;
-                                          drivers[_b.driver].drivers.push(driver);
-                                          console.log('DRIVER ADDED');
-                                          ok();
-                                      });
-         //                             drivers[b.driver].prepared = true;
+                          var capability = UtilsObject.merge({ }, _b);
+                          delete capability.driver;
+                          var driver;
+
+                          if(_b.browserName === 'phantomjs' || _b.browser === 'phantomjs'){
+                              return preparePhantomjs(options, grunt)
+                              .then(function(res){
+                                  return Promise(function(ok, ko){
+                                      driver = new swebdriver.Builder().
+                                          usingServer('http://localhost:' + options.phantomjs.port).
+                                          withCapabilities(capability).
+                                          build();
+                                      driver.manage().timeouts().implicitlyWait(30000);
+                                      driver.setContext({ capability: capability, screenshotDir: options.screenshots.baseDir});
+                                      driver.browser = _b;
+                                      drivers[_b.driver].drivers.push(driver);
+                                      grunt.verbose.ok('Driver for phantomjs added');
+                                      ok();
                                   });
-                              }else{
-                                  //selenium classic drivers
-                              }
-
-
-                          }));
-                          break;
-                          case 'browserstack':
-                              break;
+                                  drivers[_b.driver].prepared = true;
+                              });
+                          }else{
+                              return true;
+                              //selenium classic drivers
+                          }
+                      }))
+                })(b);
+            break;
+            case 'browserstack':
+                var _b = b;
+                promises.push(Promise(function(ok,ko){
+                    grunt.verbose.writeflags(_b, 'Browser');
+                    var capability = UtilsObject.merge( {
+                          'browserstack.debug': true,
+                          'browserstack.user': options.browserstack.user,
+                          'browserstack.key': options.browserstack.key,
+                          'browserstack.tunnel': options.browserstack.requireTunneling
+                    }, _b);
+                    delete capability.driver;
+                    var driver = new bwebdriver.Builder().
+                        usingServer('http://hub.browserstack.com/wd/hub').
+                        withCapabilities(capability).
+                        build();
+                    driver.manage().timeouts().implicitlyWait(30000);
+                    driver.setContext({capability: capability, screenshotDir: options.screenshots.baseDir });
+                    driver.browser = _b;
+                    drivers[_b.driver].drivers.push(driver);
+                    grunt.verbose.ok('Driver for browserstack added');
+                    ok();
+                  })
+                );
+              break;
         }
     }
 
     return Promise.all(promises)
         .then(function(){
-            console.log('returning prepared drivers : ' + util.inspect(drivers));
+            grunt.log.writeflags(_this.driversLoaded);
             return drivers;
-        });
+        }, function(err){
+            if(err){ grunt.log.error(err); }
+        }
+    );
 }
 
+
+function prepareBrowserstack(options, grunt){
+    return UtilsProcess.runDetached(
+        'java -jar ' + __dirname + '/../bin/BrowserStackTunnel.jar '+ options.browserstack.key + ' ' +  options.server.name + ',' + options.server.port + ',0',
+        {
+            parentExit: function(proc){
+                try{
+                    proc.kill();
+                    grunt.verbose.log('Browserstack tunnel killed');
+                }catch(exc){
+                    console.log('fail to kill browserstack with exception ' + exc);
+                }
+            }
+        },
+        options.browserstack.outlog,
+        options.browserstack.errlog
+    ).then(function (proc){
+        console.log('Browserstack tunnel started with handler ' + proc.pid);
+    }, function(err){
+        grunt.log.error('Error while starting browserstack tunnel ' + err);
+    });
+};
 function prepareSelenium(options, grunt){
 
     grunt.verbose.writeln('Preparing selenium hub...');
@@ -358,14 +396,14 @@ function preparePhantomjs(options, grunt){
 
 }
 
-function checkImageCompare(grunt, state){
+function checkImageCompare(grunt, options){
 
-    if(state.enableImageComparison){
+    if(options.screenshots.compare){
         return Promise(function(ok, ko){
             //verify we can compare screenshots
             fs.exists('/usr/bin/compare', function(exists){
                 if(!exists){
-                    state.enableImageComparison = false;
+                    options.screenshots.compare = false;
                     grunt.log.warn('image magick not found on the system');
                 }else{
                     grunt.verbose.ok('image magick found');
@@ -379,15 +417,16 @@ function checkImageCompare(grunt, state){
     return true;
 }
 
-function checkTestFiles(grunt, state){
+function checkTestFiles(grunt, options){
+    var files = options.tests.files;
     var all = [];
-    for(var i = 0; i < state.testFiles.length; i++){
-        var testFile = state.testFiles[i];
+    for(var i = 0; i < files.length; i++){
+        var testFile = files[i];
         all.push(Promise(function(ok, ko){
             fs.exists(testFile, function(exists){
                 if(!exists){
                     grunt.log.warn('test file ' + testFile + ' not found, removed from test queue');
-                    state.testFiles.splice(i, 1);
+                    options.tests.files.splice(i, 1);
                 }else{
                     grunt.verbose.ok('test file ' +  testFile + ' found');
 
